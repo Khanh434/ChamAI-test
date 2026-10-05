@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#10231f">
+    <title>OpenCV + YOLO trên điện thoại</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script defer src="/static/app.js?v=phone-local-11"></script>
+  </head>
+  <body>
+    <main class="page">
+      <header class="header">
+        <p class="eyebrow">CHẠY THỬ TRÊN ĐIỆN THOẠI</p>
+        <h1>Nhận diện tài liệu</h1>
+        <p class="muted">Camera → OpenCV.js → YOLO ONNX — toàn bộ xử lý trên điện thoại</p>
+      </header>
+
+      <section class="panel controls">
+        <div class="row">
+          <span class="step">1</span>
+          <div class="step-copy">
+            <strong>Nạp OpenCV và YOLO lên điện thoại</strong>
+            <p class="muted">OpenCV.js, ONNX Runtime và model chạy trong worker nền để giao diện luôn phản hồi; ảnh không được gửi lên máy tính.</p>
+          </div>
+        </div>
+        <button id="load-model" class="button secondary" type="button">Nạp model</button>
+
+        <div class="row capture-row">
+          <span class="step">2</span>
+          <div class="step-copy">
+            <strong>Chụp ảnh và xử lý tại chỗ</strong>
+            <p class="muted">Chụp ảnh hoặc chọn ảnh có sẵn. OpenCV căn chỉnh và YOLO nhận diện ngay trên điện thoại.</p>
+          </div>
+        </div>
+        <button id="capture" class="button primary" type="button" disabled>Chụp ảnh</button>
+        <input id="image-file" type="file" accept="image/*" capture="environment" hidden>
+        <p id="status" class="status" role="status" aria-live="polite">Nạp model để bắt đầu.</p>
+        <p id="error" class="error" role="alert" hidden></p>
+      </section>
+
+      <section id="result-panel" class="panel result-panel" hidden>
+        <div class="result-heading">
+          <h2>Kết quả mới nhất</h2>
+          <span id="timing" class="timing"></span>
+        </div>
+        <canvas id="preview" aria-label="Ảnh đã xử lý với vùng YOLO nhận diện"></canvas>
+        <p id="summary" class="muted"></p>
+        <p id="job" class="job"></p>
+      </section>
+    </main>
+  </body>
+</html>
