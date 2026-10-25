@@ -23,13 +23,6 @@
         <div id="status-badge" class="status-pill idle">
           <span id="status-text">Chưa nạp</span>
         </div>
-
-        <button id="btn-settings" class="icon-btn" aria-label="Cài đặt CDN" title="Cài đặt CDN">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-          </svg>
-        </button>
       </header>
 
       <!-- 2. Main Stage (Flex 1 Scroll-Free) -->
@@ -123,54 +116,6 @@
         <input id="camera-input" type="file" accept="image/*" capture="environment" hidden>
         <input id="file-input" type="file" accept="image/*" hidden>
       </footer>
-
-      <!-- Settings Modal -->
-      <div id="settings-modal" class="modal-backdrop" hidden>
-        <div class="modal-content">
-          <div class="modal-header">
-            <h2 class="modal-title">Cấu hình CDN Mô hình</h2>
-            <button id="btn-close-settings" class="icon-btn">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-              </svg>
-            </button>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label" for="provider-select">Nguồn CDN</label>
-            <select id="provider-select" class="form-select">
-              <option value="cloudflare_r2">Cloudflare R2</option>
-              <option value="huggingface">Hugging Face</option>
-              <option value="custom">Tùy biến URL</option>
-            </select>
-          </div>
-
-          <div id="r2-group" class="form-group">
-            <label class="form-label" for="r2-url-input">Cloudflare R2 Base URL</label>
-            <input id="r2-url-input" class="form-input" type="text" placeholder="https://pub-xxxx.r2.dev/models">
-          </div>
-
-          <div id="hf-group" class="form-group">
-            <label class="form-label" for="hf-url-input">Hugging Face Base URL</label>
-            <input id="hf-url-input" class="form-input" type="text" placeholder="https://huggingface.co/<user>/<repo>/resolve/main/models">
-          </div>
-
-          <div id="custom-group" class="form-group">
-            <label class="form-label" for="custom-url-input">Custom CDN Base URL</label>
-            <input id="custom-url-input" class="form-input" type="text" placeholder="https://your-custom-cdn.com/models">
-          </div>
-
-          <div class="form-group">
-            <label class="checkbox-row">
-              <input id="dewarp-toggle" type="checkbox" checked>
-              <span class="form-label" style="margin:0">Bật nắn phẳng L1 (UVDocNet)</span>
-            </label>
-          </div>
-
-          <button id="btn-save-settings" class="btn-primary" type="button" style="width:100%">Lưu cấu hình</button>
-        </div>
-      </div>
     </div>
 
     <script type="module" src="./app.js"></script>

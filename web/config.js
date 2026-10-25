@@ -1,20 +1,13 @@
 /**
  * ChamAI Configuration
- * Model CDN endpoints, default detection thresholds, and storage keys.
+ * Default model source from Hugging Face Bucket Khanh434/cham-models
  */
 
-export const STORAGE_KEY_CDN = "chamai_cdn_settings";
+export const CONFIG = {
+  // Hugging Face Storage Bucket Base URL
+  bucketBaseUrl: "https://huggingface.co/buckets/Khanh434/cham-models/resolve",
 
-export const DEFAULT_CONFIG = {
-  // CDN Provider: 'cloudflare_r2', 'huggingface', or 'custom'
-  provider: "huggingface",
-
-  // Base URLs for CDN providers
-  r2BaseUrl: "",
-  hfBaseUrl: "https://huggingface.co/buckets/Khanh434/cham-models",
-  customBaseUrl: "",
-
-  // Individual model filenames on CDN
+  // Model filenames
   models: {
     l1_dewarp: "uvdocnet.onnx",
     l2_qbox: "yolo-qbox.onnx",
@@ -22,8 +15,8 @@ export const DEFAULT_CONFIG = {
     l4_acnet: "acnet.onnx"
   },
 
-  // Pipeline execution settings
-  enableDewarp: true, // L1 UVDocNet (can be disabled on low-end devices)
+  // Pipeline detection parameters
+  enableDewarp: true,
   qboxConf: 0.35,
   qboxIou: 0.45,
   cboxConf: 0.25,
@@ -35,46 +28,9 @@ export const DEFAULT_CONFIG = {
 };
 
 /**
- * Loads configured CDN settings from localStorage or defaults
+ * Resolves full direct download URL for a model key
  */
-export function loadConfig() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY_CDN);
-    if (saved) {
-      return { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
-    }
-  } catch (e) {
-    console.warn("Could not read stored CDN settings:", e);
-  }
-  return { ...DEFAULT_CONFIG };
-}
-
-/**
- * Saves CDN settings to localStorage
- */
-export function saveConfig(cfg) {
-  try {
-    localStorage.setItem(STORAGE_KEY_CDN, JSON.stringify(cfg));
-  } catch (e) {
-    console.warn("Could not save CDN settings:", e);
-  }
-}
-
-/**
- * Resolves full URL for a specific model key ('l1_dewarp', 'l2_qbox', 'l3_cbox', 'l4_acnet')
- */
-export function getModelUrl(config, modelKey) {
-  let base = "";
-  if (config.provider === "cloudflare_r2") {
-    base = config.r2BaseUrl.trim();
-  } else if (config.provider === "custom") {
-    base = config.customBaseUrl.trim();
-  } else {
-    base = config.hfBaseUrl.trim();
-  }
-
-  // Remove trailing slash
-  base = base.replace(/\/+$/, "");
-  const filename = config.models[modelKey] || "";
-  return `${base}/${filename}`;
+export function getModelUrl(modelKey) {
+  const filename = CONFIG.models[modelKey] || "";
+  return `${CONFIG.bucketBaseUrl}/${filename}`;
 }

@@ -1,16 +1,16 @@
 /**
  * ChamAI Web Client Application
  * Minimalist, light-themed, scroll-free mobile document scanner interface.
+ * Default model source: Hugging Face Storage Bucket Khanh434/cham-models
  */
 
-import { loadConfig, saveConfig, getModelUrl } from "./config.js";
+import { CONFIG, getModelUrl } from "./config.js";
 
 // DOM Elements
 const elements = {
   // Header
   statusBadge: document.getElementById("status-badge"),
   statusText: document.getElementById("status-text"),
-  btnSettings: document.getElementById("btn-settings"),
 
   // Stages
   idleStage: document.getElementById("idle-stage"),
@@ -33,24 +33,10 @@ const elements = {
   btnCapture: document.getElementById("btn-capture"),
   btnUpload: document.getElementById("btn-upload"),
   cameraInput: document.getElementById("camera-input"),
-  fileInput: document.getElementById("file-input"),
-
-  // Settings Modal
-  settingsModal: document.getElementById("settings-modal"),
-  btnCloseSettings: document.getElementById("btn-close-settings"),
-  btnSaveSettings: document.getElementById("btn-save-settings"),
-  providerSelect: document.getElementById("provider-select"),
-  r2UrlInput: document.getElementById("r2-url-input"),
-  hfUrlInput: document.getElementById("hf-url-input"),
-  customUrlInput: document.getElementById("custom-url-input"),
-  dewarpToggle: document.getElementById("dewarp-toggle"),
-  r2Group: document.getElementById("r2-group"),
-  hfGroup: document.getElementById("hf-group"),
-  customGroup: document.getElementById("custom-group")
+  fileInput: document.getElementById("file-input")
 };
 
 // State
-let config = loadConfig();
 let worker = null;
 let isModelReady = false;
 let isProcessing = false;
@@ -78,6 +64,14 @@ function initWorker() {
 
   worker = new Worker("./pipeline-worker.js");
 
+  worker.onerror = (e) => {
+    console.error("Worker error:", e);
+    isProcessing = false;
+    alert(`Lỗi Worker: ${e.message || "Không xác định"}`);
+    showStage("idle");
+    setStatusPill("error", "Lỗi worker");
+  };
+
   worker.onmessage = (e) => {
     const data = e.data;
     if (data.type === "status") {
@@ -92,7 +86,11 @@ function initWorker() {
     } else if (data.type === "complete") {
       isProcessing = false;
       latestResult = data;
-      renderResult(data.imageBitmap, data.summary);
+      try {
+        renderResult(data.imageBitmap, data.summary);
+      } catch (err) {
+        console.error("Error rendering result canvas:", err);
+      }
       showStage("result");
     } else if (data.type === "error") {
       isProcessing = false;
@@ -117,19 +115,24 @@ function updateStatus(step, message, progress) {
 
 function showStage(stageName) {
   elements.idleStage.hidden = stageName !== "idle";
+  elements.idleStage.style.display = stageName === "idle" ? "flex" : "none";
+
   elements.loadingStage.hidden = stageName !== "loading";
+  elements.loadingStage.style.display = stageName === "loading" ? "flex" : "none";
+
   elements.resultStage.hidden = stageName !== "result";
+  elements.resultStage.style.display = stageName === "result" ? "flex" : "none";
 }
 
 /**
- * Triggers loading model from CDN
+ * Triggers loading model from Hugging Face Bucket
  */
 function loadModels() {
   initWorker();
   showStage("loading");
-  setStatusPill("loading", "Đang nạp CDN...");
+  setStatusPill("loading", "Đang nạp model...");
   elements.btnLoadModel.disabled = true;
-  worker.postMessage({ type: "init", config });
+  worker.postMessage({ type: "init", config: CONFIG });
 }
 
 /**
@@ -139,7 +142,7 @@ async function handleImageFile(file) {
   if (!file) return;
 
   if (!isModelReady) {
-    const confirmLoad = confirm("Mô hình chưa được nạp. Bạn có muốn nạp mô hình từ CDN bây giờ không?");
+    const confirmLoad = confirm("Mô hình chưa được nạp. Bạn có muốn nạp mô hình từ Hugging Face bây giờ không?");
     if (confirmLoad) {
       loadModels();
     }
@@ -155,7 +158,7 @@ async function handleImageFile(file) {
     worker.postMessage({
       type: "process",
       imageBitmap,
-      config
+      config: CONFIG
     }, [imageBitmap]);
   } catch (err) {
     isProcessing = false;
@@ -246,57 +249,9 @@ function setupViewerGestures() {
 }
 
 /**
- * Settings Modal Logic
- */
-function openSettingsModal() {
-  elements.providerSelect.value = config.provider;
-  elements.r2UrlInput.value = config.r2BaseUrl;
-  elements.hfUrlInput.value = config.hfBaseUrl;
-  elements.customUrlInput.value = config.customBaseUrl || "";
-  elements.dewarpToggle.checked = config.enableDewarp;
-  updateProviderVisibility();
-  elements.settingsModal.hidden = false;
-}
-
-function closeSettingsModal() {
-  elements.settingsModal.hidden = true;
-}
-
-function updateProviderVisibility() {
-  const p = elements.providerSelect.value;
-  elements.r2Group.hidden = p !== "cloudflare_r2";
-  elements.hfGroup.hidden = p !== "huggingface";
-  elements.customGroup.hidden = p !== "custom";
-}
-
-function saveSettings() {
-  config.provider = elements.providerSelect.value;
-  config.r2BaseUrl = elements.r2UrlInput.value.trim();
-  config.hfBaseUrl = elements.hfUrlInput.value.trim();
-  config.customBaseUrl = elements.customUrlInput.value.trim();
-  config.enableDewarp = elements.dewarpToggle.checked;
-
-  saveConfig(config);
-  closeSettingsModal();
-  alert("Đã lưu cài đặt CDN. Nhấn 'Nạp model' để cập nhật.");
-
-  // Reset model readiness
-  isModelReady = false;
-  elements.btnLoadModel.hidden = false;
-  elements.btnLoadModel.disabled = false;
-  setStatusPill("idle", "Chưa nạp");
-}
-
-/**
  * Event Listeners Registration
  */
 function initEventListeners() {
-  // Header Actions
-  elements.btnSettings.addEventListener("click", openSettingsModal);
-  elements.btnCloseSettings.addEventListener("click", closeSettingsModal);
-  elements.btnSaveSettings.addEventListener("click", saveSettings);
-  elements.providerSelect.addEventListener("change", updateProviderVisibility);
-
   // Main Actions
   elements.btnLoadModel.addEventListener("click", loadModels);
   elements.btnCapture.addEventListener("click", () => elements.cameraInput.click());
@@ -334,4 +289,5 @@ function initEventListeners() {
 document.addEventListener("DOMContentLoaded", () => {
   initEventListeners();
   setStatusPill("idle", "Chưa nạp model");
+  showStage("idle");
 });

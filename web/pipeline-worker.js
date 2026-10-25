@@ -8,6 +8,8 @@
 const REV_CHOICE_MAP = { 0: "A", 1: "B", 2: "C", 3: "D", 4: "UNKNOWN" };
 const REV_STATE_MAP = { 0: "not_selected", 1: "selected", 2: "crossed_out" };
 
+const ONNX_RUNTIME_CDN = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/";
+
 let ortInitialized = false;
 let sessions = {
   l1: null,
@@ -70,8 +72,12 @@ async function initPipeline(config) {
   try {
     if (!ortInitialized) {
       postStatus("init", "Khởi tạo ONNX Runtime Web...");
-      importScripts("https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js");
-      ort.env.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 2);
+      importScripts(`${ONNX_RUNTIME_CDN}ort.min.js`);
+      if (!self.ort) {
+        throw new Error("Không thể nạp thư viện onnxruntime-web từ CDN.");
+      }
+      self.ort.env.wasm.wasmPaths = ONNX_RUNTIME_CDN;
+      self.ort.env.wasm.numThreads = 1;
       ortInitialized = true;
     }
 
@@ -80,11 +86,9 @@ async function initPipeline(config) {
       graphOptimizationLevel: "all"
     };
 
-    // Helper to resolve URL
+    // Helper to resolve URL from Hugging Face Bucket
     function resolveUrl(filename) {
-      let base = config.provider === "cloudflare_r2" ? config.r2BaseUrl :
-                 config.provider === "custom" ? config.customBaseUrl : config.hfBaseUrl;
-      base = base.replace(/\/+$/, "");
+      const base = (config.bucketBaseUrl || "https://huggingface.co/buckets/Khanh434/cham-models/resolve").replace(/\/+$/, "");
       return `${base}/${filename}`;
     }
 
@@ -263,89 +267,155 @@ function prepareAcnetTensor(cropCanvas, canvasH = 64, canvasW = 256) {
 }
 
 /**
- * L1 Dewarping execution
+ * L1 Dewarping execution (UVDocNet)
+ * Auto-adapts to both portrait [1, 3, 712, 488] and legacy [1, 3, 488, 712] exports.
  */
 async function runL1Dewarp(sourceCanvas) {
   if (!sessions.l1) return sourceCanvas;
 
   try {
-    const l1W = 712;
-    const l1H = 488;
-    const offscreen = new OffscreenCanvas(l1W, l1H);
-    const ctx = offscreen.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(sourceCanvas, 0, 0, l1W, l1H);
+    let p2d = null;
+    let gh = 45;
+    let gw = 31;
 
-    const imgData = ctx.getImageData(0, 0, l1W, l1H).data;
-    const numPixels = l1W * l1H;
-    const floatData = new Float32Array(3 * numPixels);
-
-    for (let i = 0; i < numPixels; i++) {
-      floatData[i] = imgData[i * 4] / 255.0;
-      floatData[i + numPixels] = imgData[i * 4 + 1] / 255.0;
-      floatData[i + 2 * numPixels] = imgData[i * 4 + 2] / 255.0;
+    // First attempt portrait input: width 488, height 712
+    try {
+      p2d = await runL1Inference(sourceCanvas, 488, 712);
+    } catch (e1) {
+      console.warn("Portrait L1 inference failed, retrying with landscape dimensions:", e1);
+      // Fallback if model was exported with [1, 3, 488, 712]
+      p2d = await runL1Inference(sourceCanvas, 712, 488);
     }
 
-    const inputTensor = new ort.Tensor("float32", floatData, [1, 3, l1H, l1W]);
-    const feeds = { image: inputTensor };
-    const results = await sessions.l1.run(feeds);
-    const p2d = results.p2d; // [1, 2, 31, 45]
+    if (!p2d) return sourceCanvas;
 
-    // Perform grid-based texture remap on full resolution canvas
-    return remapCanvasWithGrid(sourceCanvas, p2d);
+    if (p2d.dims && p2d.dims.length >= 4) {
+      gh = p2d.dims[2];
+      gw = p2d.dims[3];
+    }
+
+    return unwarpImageBilinear(sourceCanvas, p2d.data, gh, gw);
   } catch (err) {
     console.warn("L1 Dewarp skipped due to error, proceeding with raw canvas:", err);
     return sourceCanvas;
   }
 }
 
+async function runL1Inference(sourceCanvas, targetW, targetH) {
+  const offscreen = new OffscreenCanvas(targetW, targetH);
+  const ctx = offscreen.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(sourceCanvas, 0, 0, targetW, targetH);
+
+  const imgData = ctx.getImageData(0, 0, targetW, targetH).data;
+  const numPixels = targetW * targetH;
+  const floatData = new Float32Array(3 * numPixels);
+
+  // RGB planar [1, 3, H, W] normalized to [0, 1]
+  for (let i = 0; i < numPixels; i++) {
+    floatData[i] = imgData[i * 4] / 255.0;
+    floatData[i + numPixels] = imgData[i * 4 + 1] / 255.0;
+    floatData[i + 2 * numPixels] = imgData[i * 4 + 2] / 255.0;
+  }
+
+  const inputTensor = new ort.Tensor("float32", floatData, [1, 3, targetH, targetW]);
+  const inputName = sessions.l1.inputNames[0] || "image";
+  const results = await sessions.l1.run({ [inputName]: inputTensor });
+  return results.p2d;
+}
+
 /**
- * Remaps an image using the UVDocNet 2D mesh (31 rows x 45 cols)
+ * Exact Mathematical Bilinear Unwarping (equivalent to PyTorch F.interpolate + F.grid_sample align_corners=True)
  */
-function remapCanvasWithGrid(sourceCanvas, p2dTensor) {
-  const origW = sourceCanvas.width;
-  const origH = sourceCanvas.height;
-  const outCanvas = new OffscreenCanvas(origW, origH);
+function unwarpImageBilinear(sourceCanvas, p2dData, gh = 45, gw = 31) {
+  // Constrain resolution to max 2048 to prevent memory exhaustion on mobile
+  const maxDim = 2048;
+  let W = sourceCanvas.width;
+  let H = sourceCanvas.height;
+
+  let workingCanvas = sourceCanvas;
+  if (Math.max(W, H) > maxDim) {
+    const scale = maxDim / Math.max(W, H);
+    W = Math.round(W * scale);
+    H = Math.round(H * scale);
+    workingCanvas = new OffscreenCanvas(W, H);
+    const sctx = workingCanvas.getContext("2d");
+    sctx.drawImage(sourceCanvas, 0, 0, W, H);
+  }
+
+  const sCtx = workingCanvas.getContext("2d", { willReadFrequently: true });
+  const srcImageData = sCtx.getImageData(0, 0, W, H);
+  const src = srcImageData.data;
+
+  const outCanvas = new OffscreenCanvas(W, H);
   const outCtx = outCanvas.getContext("2d");
+  const dstImageData = outCtx.createImageData(W, H);
+  const dst = dstImageData.data;
 
-  const gh = 31;
-  const gw = 45;
-  const p2dData = p2dTensor.data;
+  const p2d_stride = gh * gw;
+  const gh_minus_1 = gh - 1;
+  const gw_minus_1 = gw - 1;
+  const W_minus_1 = W - 1;
+  const H_minus_1 = H - 1;
 
-  // Draw triangulated or bilinear quad mesh
-  // Grid values are in normalized [-1, 1] coords
-  for (let r = 0; r < gh - 1; r++) {
-    for (let c = 0; c < gw - 1; c++) {
-      // Quad coordinates in normalized space [-1, 1]
-      const getCoord = (row, col) => {
-        const u = p2dData[row * gw + col];
-        const v = p2dData[gh * gw + row * gw + col];
-        return {
-          sx: ((u + 1) / 2) * origW,
-          sy: ((v + 1) / 2) * origH
-        };
-      };
+  for (let y = 0; y < H; y++) {
+    const v = (y / H_minus_1) * gh_minus_1;
+    const y0 = v | 0;
+    const y1 = Math.min(y0 + 1, gh_minus_1);
+    const fy = v - y0;
+    const one_minus_fy = 1.0 - fy;
 
-      const p00 = getCoord(r, c);
-      const p10 = getCoord(r + 1, c);
-      const p01 = getCoord(r, c + 1);
-      const p11 = getCoord(r + 1, c + 1);
+    const y0_gw = y0 * gw;
+    const y1_gw = y1 * gw;
+    const y_W_4 = y * W * 4;
 
-      // Destination quad in flat unwarped space
-      const dx0 = (c / (gw - 1)) * origW;
-      const dx1 = ((c + 1) / (gw - 1)) * origW;
-      const dy0 = (r / (gh - 1)) * origH;
-      const dy1 = ((r + 1) / (gh - 1)) * origH;
+    for (let x = 0; x < W; x++) {
+      const u = (x / W_minus_1) * gw_minus_1;
+      const x0 = u | 0;
+      const x1 = Math.min(x0 + 1, gw_minus_1);
+      const fx = u - x0;
+      const one_minus_fx = 1.0 - fx;
 
-      // Draw slice
-      const sw = Math.max(1, p01.sx - p00.sx);
-      const sh = Math.max(1, p10.sy - p00.sy);
-      const dw = Math.max(1, dx1 - dx0);
-      const dh = Math.max(1, dy1 - dy0);
+      const w00 = one_minus_fy * one_minus_fx;
+      const w01 = one_minus_fy * fx;
+      const w10 = fy * one_minus_fx;
+      const w11 = fy * fx;
 
-      outCtx.drawImage(sourceCanvas, p00.sx, p00.sy, sw, sh, dx0, dy0, dw, dh);
+      // Continuous normalized coordinates from interpolated p2d
+      const p2dx = w00 * p2dData[y0_gw + x0] + w01 * p2dData[y0_gw + x1] +
+                   w10 * p2dData[y1_gw + x0] + w11 * p2dData[y1_gw + x1];
+      const p2dy = w00 * p2dData[p2d_stride + y0_gw + x0] + w01 * p2dData[p2d_stride + y0_gw + x1] +
+                   w10 * p2dData[p2d_stride + y1_gw + x0] + w11 * p2dData[p2d_stride + y1_gw + x1];
+
+      // Map [-1, 1] to source continuous pixel coordinates (align_corners=True)
+      const sx = Math.max(0, Math.min(W_minus_1, ((p2dx + 1.0) * 0.5) * W_minus_1));
+      const sy = Math.max(0, Math.min(H_minus_1, ((p2dy + 1.0) * 0.5) * H_minus_1));
+
+      const sx0 = sx | 0;
+      const sy0 = sy | 0;
+      const sx1 = Math.min(sx0 + 1, W_minus_1);
+      const sy1 = Math.min(sy0 + 1, H_minus_1);
+      const sfx = sx - sx0;
+      const sfy = sy - sy0;
+
+      const sw00 = (1.0 - sfy) * (1.0 - sfx);
+      const sw01 = (1.0 - sfy) * sfx;
+      const sw10 = sfy * (1.0 - sfx);
+      const sw11 = sfy * sfx;
+
+      const idx00 = (sy0 * W + sx0) * 4;
+      const idx01 = (sy0 * W + sx1) * 4;
+      const idx10 = (sy1 * W + sx0) * 4;
+      const idx11 = (sy1 * W + sx1) * 4;
+
+      const d_idx = y_W_4 + x * 4;
+      dst[d_idx]     = (sw00 * src[idx00]     + sw01 * src[idx01]     + sw10 * src[idx10]     + sw11 * src[idx11]) | 0;
+      dst[d_idx + 1] = (sw00 * src[idx00 + 1] + sw01 * src[idx01 + 1] + sw10 * src[idx10 + 1] + sw11 * src[idx11 + 1]) | 0;
+      dst[d_idx + 2] = (sw00 * src[idx00 + 2] + sw01 * src[idx01 + 2] + sw10 * src[idx10 + 2] + sw11 * src[idx11 + 2]) | 0;
+      dst[d_idx + 3] = 255;
     }
   }
 
+  outCtx.putImageData(dstImageData, 0, 0);
   return outCanvas;
 }
 
@@ -486,15 +556,16 @@ async function processImage(imageBitmap, config) {
   // 5. Render Final Annotated Canvas
   // -----------------------------------------------------------------
   postStatus("render", "Đang hoàn tất vẽ ảnh kết quả...", 98);
-  const finalCanvas = new OffscreenCanvas(imgW, imgH);
-  const fctx = finalCanvas.getContext("2d");
-  fctx.drawImage(workingCanvas, 0, 0);
 
-  // Draw annotations
-  drawAnnotations(fctx, results, imgW, imgH);
+  try {
+    const fctx = workingCanvas.getContext("2d");
+    drawAnnotations(fctx, results, imgW, imgH);
+  } catch (drawErr) {
+    console.warn("Could not draw annotations on canvas:", drawErr);
+  }
 
   const durationSec = ((performance.now() - t0) / 1000).toFixed(2);
-  const finalBitmap = finalCanvas.transferToImageBitmap();
+  const finalBitmap = workingCanvas.transferToImageBitmap();
 
   self.postMessage({
     type: "complete",
@@ -525,14 +596,18 @@ function argmax(arr) {
  * Draws crisp, professional annotation boxes and badges onto the canvas
  */
 function drawAnnotations(ctx, questions, width, height) {
+  if (!ctx || !questions || questions.length === 0) return;
   const isHighRes = width > 1200;
   const qBoxLineWidth = isHighRes ? 3 : 2;
   const cBoxLineWidth = isHighRes ? 2 : 1.5;
   const fontSize = isHighRes ? 20 : 14;
 
-  ctx.font = `600 ${fontSize}px sans-serif`;
+  try {
+    ctx.font = `600 ${fontSize}px sans-serif`;
+  } catch (_) {}
 
   for (const q of questions) {
+    if (!q.questionBox) continue;
     const [qx1, qy1, qx2, qy2] = q.questionBox;
 
     // Draw question outline (Cyan blue)
@@ -542,16 +617,23 @@ function drawAnnotations(ctx, questions, width, height) {
 
     // Question index badge
     const qBadge = `Câu ${q.questionIndex}`;
-    const badgeW = ctx.measureText(qBadge).width + 12;
+    let badgeW = 60;
+    try {
+      badgeW = ctx.measureText(qBadge).width + 12;
+    } catch (_) {}
     const badgeH = fontSize + 8;
 
     ctx.fillStyle = "#0284C7";
     ctx.fillRect(qx1, Math.max(0, qy1 - badgeH), badgeW, badgeH);
     ctx.fillStyle = "#FFFFFF";
-    ctx.fillText(qBadge, qx1 + 6, Math.max(0, qy1 - badgeH) + fontSize);
+    try {
+      ctx.fillText(qBadge, qx1 + 6, Math.max(0, qy1 - badgeH) + fontSize);
+    } catch (_) {}
 
     // Draw choices
+    if (!q.choices) continue;
     for (const c of q.choices) {
+      if (!c.box_abs) continue;
       const [cx1, cy1, cx2, cy2] = c.box_abs;
       let strokeColor = "#94A3B8"; // default gray
       let fillColor = "rgba(148, 163, 184, 0.15)";
@@ -578,13 +660,18 @@ function drawAnnotations(ctx, questions, width, height) {
 
       // Choice letter badge
       const cLabel = `${c.choice}${statusIcon}`;
-      const cBadgeW = ctx.measureText(cLabel).width + 8;
+      let cBadgeW = 28;
+      try {
+        cBadgeW = ctx.measureText(cLabel).width + 8;
+      } catch (_) {}
       const cBadgeH = fontSize + 4;
 
       ctx.fillStyle = badgeBg;
       ctx.fillRect(cx1, Math.max(0, cy1 - cBadgeH), cBadgeW, cBadgeH);
       ctx.fillStyle = "#FFFFFF";
-      ctx.fillText(cLabel, cx1 + 4, Math.max(0, cy1 - cBadgeH) + fontSize - 2);
+      try {
+        ctx.fillText(cLabel, cx1 + 4, Math.max(0, cy1 - cBadgeH) + fontSize - 2);
+      } catch (_) {}
     }
   }
 }

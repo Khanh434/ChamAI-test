@@ -31,7 +31,8 @@ def export_l1(output_path: Path):
 
     wrapper = L1Wrapper(l1_model)
     wrapper.eval()
-    dummy_input = torch.randn(1, 3, 488, 712)
+    # Height is 712, Width is 488 (standard portrait document)
+    dummy_input = torch.randn(1, 3, 712, 488)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     torch.onnx.export(
