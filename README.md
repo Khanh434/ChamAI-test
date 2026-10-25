@@ -1,48 +1,105 @@
-# Nhận diện tài liệu trên điện thoại
+# ChamAI - Ứng dụng Nhận diện Bài thi Trắc nghiệm trên Di động
 
-Ứng dụng web xử lý ảnh hoàn toàn trong trình duyệt điện thoại:
+Ứng dụng web hiện đại nắn phẳng và nhận diện bài thi trắc nghiệm hoàn toàn trong trình duyệt (Client-side) tối ưu cho thiết bị di động, sẵn sàng triển khai trên **Vercel**:
 
-1. OpenCV.js tìm và căn chỉnh tài liệu.
-2. ONNX Runtime Web chạy model `qbox` ở kích thước 1024 × 1024.
-3. Ảnh và kết quả không được gửi tới backend; trang không cần API hoặc cơ sở dữ liệu.
+* **Pipeline 4 tầng chuyên sâu**:
+  1. **L1 (UVDocNet)**: Nắn phẳng tài liệu cong vênh.
+  2. **L2 (YOLO QBox)**: Phát hiện vị trí từng câu hỏi trên tài liệu.
+  3. **L3 (YOLO CBox)**: Phát hiện vùng các phương án trả lời trên từng câu hỏi.
+  4. **L4 (AnswerChoiceNet)**: Đọc ký tự phương án (A, B, C, D) và trạng thái khoanh (*selected*, *not_selected*, *crossed_out*).
+* **0đ chi phí máy chủ (Serverless / Static)**: Toàn bộ quá trình suy luận AI chạy trực tiếp trong Web Worker qua **ONNX Runtime Web**, ảnh chụp không gửi lên bất kỳ máy chủ nào.
+* **Giao diện Minimalist, Light Theme, Scroll-Free**: Thiết kế chuẩn `100dvh` không cuộn trang, tối ưu thao tác 1 tay trên điện thoại, hỗ trợ thu phóng 2 ngón tay (**pinch-to-zoom**) và kéo (**pan**) mượt mà.
+* **Linh hoạt CDN**: Tải trọng số mô hình từ **Cloudflare R2** hoặc **Hugging Face**.
 
-## Tài nguyên
+---
 
-- OpenCV.js và WebAssembly được phục vụ như static assets từ Vercel CDN trong `web/opencv/`.
-- Model YOLO được tải trực tiếp từ [Hugging Face](https://huggingface.co/Khanh434/YOLOv8n-doclaynet-fine-tuned-chamai); ứng dụng không đóng gói file model vào repository hoặc Vercel deployment.
-- ONNX Runtime Web 1.22.0 và WebAssembly của runtime được tải từ jsDelivr CDN.
-- OpenCV.js, ONNX Runtime và model chỉ được tải khi nhấn **Nạp model**. Model được lấy từ repository Hugging Face công khai; ảnh đầu vào vẫn ở trên thiết bị.
+## 1. Xuất Mô hình sang ONNX
 
-Model đang được ghim vào revision `24683b7e898e3b2b03178272e03273efad9bc955` để deployment ổn định. Sau khi cập nhật model trên Hugging Face, đổi revision trong `MODEL_URL` ở `web/static/pipeline-worker.js`.
-
-## Deploy lên Vercel
-
-1. Đưa repository lên GitHub/GitLab hoặc kết nối repository Git hiện có trong Vercel.
-2. Import project trong Vercel. Chọn framework **Other**; `vercel.json` đã cấu hình thư mục output là `web`.
-3. Không cần build command, biến môi trường, backend hay cấu hình lưu trữ.
-4. Deploy. Đường dẫn gốc mở giao diện; Vercel phân phối model và OpenCV từ CDN.
-
-Có thể deploy bằng Vercel CLI:
+Nếu muốn tự xuất lại các file mô hình từ playground `ground-25-pipeline-v3`:
 
 ```powershell
-npx vercel
-npx vercel --prod
+python scripts/export_to_onnx.py
 ```
 
-## Chạy thử trên máy tính
+Kết quả sẽ nằm trong thư mục `output_onnx/`:
+* `uvdocnet.onnx` (~30 MB)
+* `yolo-qbox.onnx` (~12 MB)
+* `yolo-cbox.onnx` (~10 MB)
+* `acnet.onnx` (~0.6 MB)
 
-Phục vụ thư mục `web` bằng HTTP server tĩnh. Ví dụ nếu đã cài Python:
+---
+
+## 2. Tải Trọng số lên CDN (Cloudflare R2 hoặc Hugging Face)
+
+Tạo thư mục `models/` trên CDN và tải 4 file `.onnx` lên:
+
+```text
+models/
+├── uvdocnet.onnx
+├── yolo-qbox.onnx
+├── yolo-cbox.onnx
+└── acnet.onnx
+```
+
+### Phương án A: Cloudflare R2 (Khuyên dùng)
+* Upload vào R2 bucket (ví dụ bucket `chamai-models`).
+* Bật Custom Domain hoặc R2 dev URL, ví dụ: `https://pub-xxxx.r2.dev/models`.
+* **Lưu ý CORS**: Bật CORS trên R2 bucket để trình duyệt có thể fetch mô hình:
+  ```json
+  [
+    {
+      "AllowedOrigins": ["*"],
+      "AllowedMethods": ["GET", "HEAD"],
+      "AllowedHeaders": ["*"]
+    }
+  ]
+  ```
+
+### Phương án B: Hugging Face
+* Tạo repository dạng Model (Public) trên Hugging Face.
+* Upload 4 file vào repo.
+* Đường dẫn Base URL dạng:
+  `https://huggingface.co/<username>/<repo_name>/resolve/main/models`
+
+---
+
+## 3. Cấu hình Đường dẫn CDN trong Ứng dụng
+
+Bạn có 2 cách rất đơn giản:
+
+1. **Cách 1 (Ngay trên giao diện web)**:
+   * Mở web, bấm vào biểu tượng **⚙ Cài đặt CDN** ở góc trên bên phải.
+   * Chọn nhà cung cấp (**Cloudflare R2**, **Hugging Face**, hoặc **Tùy biến URL**).
+   * Dán Base URL của bạn vào và bấm **Lưu cấu hình**. Trình duyệt sẽ tự động ghi nhớ vào `localStorage`.
+
+2. **Cách 2 (Sửa file mặc định)**:
+   * Mở file [web/config.js](file:///E:/repositories/ChamAI-test/web/config.js) và cập nhật `r2BaseUrl` hoặc `hfBaseUrl`.
+
+---
+
+## 4. Chạy Thử nghiệm Cục bộ
+
+Chạy static server phục vụ thư mục `web`:
 
 ```powershell
 python -m http.server 8000 --directory web
 ```
 
-Mở `http://localhost:8000`. Nhấn **Nạp model** trước khi chụp hoặc chọn ảnh. Thiết bị cần kết nối Internet để tải OpenCV.js, ONNX Runtime và model.
+Mở trình duyệt tại `http://localhost:8000`.
 
-## Model và pipeline
+---
 
-Model có một lớp (`qbox`) với output `[1, 5, 21504]`; ngưỡng confidence là `0.8`, NMS IoU là `0.45`. Ảnh đầu vào giới hạn cạnh dài tối đa 1800 px; OpenCV tìm góc tài liệu trên ảnh tối đa 1000 px, căn phối cảnh, deskew và thử hiệu chỉnh cong nhẹ trên lưới 3 × 3. Nếu không tìm được góc hoặc tín hiệu đường chữ phù hợp, ảnh đã resize vẫn được đưa vào YOLO.
+## 5. Triển khai lên Vercel
 
-Các script Python trong thư mục gốc và `new/` là công cụ thử nghiệm riêng, không nằm trong output deploy của Vercel.
+Dự án đã được cấu hình sẵn trong [vercel.json](file:///E:/repositories/ChamAI-test/vercel.json):
 
-`requirements.txt` chỉ dành cho tiện ích Python `doc_align.py`; `new/requirements.txt` thuộc pipeline thử nghiệm trong thư mục `new/`.
+1. Đẩy code lên GitHub:
+   ```powershell
+   git add .
+   git commit -m "Complete replacement with Pipeline v3 and Scroll-free Light UI"
+   git push origin main
+   ```
+2. Kết nối repo với **Vercel**:
+   * Framework Preset: **Other**.
+   * Output Directory: `web` (đã được cấu hình tự động qua `vercel.json`).
+3. Deploy hoàn tất. Người dùng truy cập trang web trên điện thoại có thể quét bài thi ngay lập tức.
