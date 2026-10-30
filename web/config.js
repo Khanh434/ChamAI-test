@@ -17,11 +17,11 @@ export const CONFIG = {
 
   // Pipeline detection parameters
   enableDewarp: true,
-  qboxConf: 0.35,
-  qboxIou: 0.45,
-  cboxConf: 0.25,
-  cboxIou: 0.45,
-  acnetConf: 0.40,
+  qboxConf: 0.4,
+  qboxIou: 0.15,
+  cboxConf: 0.4,
+  cboxIou: 0.15,
+  acnetConf: 0.30,
 
   // Runtime engine
   ortCdn: "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/"
